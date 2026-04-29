@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
 GitHub Contribution Calendar Pixel Art Generator
-Run this script once daily to gradually fill in the contribution calendar.
+Run this script once to generate all commits, then push to GitHub.
 """
 
-import json
+import argparse
 import os
 import subprocess
 import sys
@@ -13,8 +13,7 @@ from pathlib import Path
 
 # Configuration
 REPO_PATH = Path(__file__).parent
-STATE_FILE = REPO_PATH / ".pixel-art-state.json"
-COMMITS_PER_PIXEL = 5
+DEFAULT_COMMITS_PER_PIXEL = 10
 
 # 5x7 pixel font (each letter is 5 columns wide, 7 rows tall)
 FONT = {
@@ -297,24 +296,8 @@ def generate_pattern(word):
 
     return pattern
 
-def load_state():
-    """Load progress state from file."""
-    if STATE_FILE.exists():
-        with open(STATE_FILE, 'r') as f:
-            return json.load(f)
-    return {
-        "word": None,
-        "start_date": None,
-        "processed_days": [],
-        "total_commits": 0
-    }
 
-def save_state(state):
-    """Save progress state to file."""
-    with open(STATE_FILE, 'w') as f:
-        json.dump(state, indent=2, fp=f)
-
-def get_pattern_dates(pattern, start_date):
+def get_pattern_dates(pattern, start_date, commits_per_pixel):
     """
     Calculate which dates need commits based on the pattern.
     Returns dict: {date_string: num_commits}
@@ -328,7 +311,7 @@ def get_pattern_dates(pattern, start_date):
                 days_back = col * 7 + (6 - row)
                 commit_date = start_date - timedelta(days=days_back)
                 date_str = commit_date.strftime("%Y-%m-%d")
-                dates_map[date_str] = COMMITS_PER_PIXEL
+                dates_map[date_str] = commits_per_pixel
 
     return dates_map
 
@@ -356,8 +339,6 @@ def make_commits(date_str, num_commits):
             capture_output=True
         )
 
-    print(f"✓ Made {num_commits} commits for {date_str}")
-
 def preview_pattern(pattern, word):
     """Show ASCII preview of the pattern."""
     print(f"\n📐 Pattern preview for '{word}':")
@@ -369,6 +350,24 @@ def preview_pattern(pattern, word):
 
 def main():
     """Main execution function."""
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(
+        description='Create pixel art in your GitHub contribution calendar',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''
+Examples:
+  python3 github-pixel-art.py HELLO
+  python3 github-pixel-art.py "HELLO WORLD" --commits 15
+  python3 github-pixel-art.py YOLO -c 20
+        '''
+    )
+    parser.add_argument('word', nargs='*', help='Word to display (A-Z, spaces)')
+    parser.add_argument('-c', '--commits', type=int, default=DEFAULT_COMMITS_PER_PIXEL,
+                       help=f'Commits per pixel (default: {DEFAULT_COMMITS_PER_PIXEL}, higher = darker)')
+
+    args = parser.parse_args()
+    commits_per_pixel = args.commits
+
     print("🎨 GitHub Contribution Calendar Pixel Art Generator")
     print("=" * 60)
 
@@ -383,85 +382,58 @@ def main():
         print("  git remote add origin <your-repo-url>")
         sys.exit(1)
 
-    state = load_state()
-
-    # First run - get word from user
-    if state["word"] is None:
+    # Get word from user
+    if args.word:
+        word = " ".join(args.word)
+    else:
         print("\n💬 Enter a word to display (A-Z, spaces allowed)")
         max_chars = (52 + 1) // 6
         print(f"   Maximum length: ~{max_chars} characters")
+        word = input("\n   Word: ").strip()
 
-        if len(sys.argv) > 1:
-            word = " ".join(sys.argv[1:])
-        else:
-            word = input("\n   Word: ").strip()
+    if not word:
+        print("❌ No word entered!")
+        sys.exit(1)
 
-        if not word:
-            print("❌ No word entered!")
-            sys.exit(1)
+    # Generate pattern
+    pattern = generate_pattern(word)
+    preview_pattern(pattern, word)
 
-        # Generate pattern
-        pattern = generate_pattern(word)
-        preview_pattern(pattern, word)
+    # Show commits per pixel setting
+    print(f"\n⚙️  Commits per pixel: {commits_per_pixel}")
 
-        # Confirm
-        confirm = input("\n✨ Proceed with this pattern? (y/n): ").strip().lower()
-        if confirm != 'y':
-            print("Cancelled.")
-            sys.exit(0)
+    # Confirm
+    confirm = input("\n✨ Proceed with this pattern? (y/n): ").strip().lower()
+    if confirm != 'y':
+        print("Cancelled.")
+        sys.exit(0)
 
-        # Initialize state
-        one_year_ago = datetime.now() - timedelta(days=365)
-        state["word"] = word.upper()
-        state["start_date"] = one_year_ago.strftime("%Y-%m-%d")
-        save_state(state)
+    # Calculate start date (1 year ago)
+    one_year_ago = datetime.now() - timedelta(days=365)
 
-        print(f"\n📅 Starting date: {state['start_date']} (1 year ago)")
-        print("⏰ Run this script daily to gradually fill the pattern!")
+    # Get all dates that need commits
+    pattern_dates = get_pattern_dates(pattern, one_year_ago, commits_per_pixel)
+    total_dates = len(pattern_dates)
+    total_commits = total_dates * commits_per_pixel
 
-    # Load pattern and start date
-    pattern = generate_pattern(state["word"])
-    start_date = datetime.strptime(state["start_date"], "%Y-%m-%d")
-
-    # Get dates that need commits
-    pattern_dates = get_pattern_dates(pattern, start_date)
-
-    # Find remaining dates
-    remaining_dates = {
-        date: commits
-        for date, commits in pattern_dates.items()
-        if date not in state["processed_days"]
-    }
-
-    if not remaining_dates:
-        print(f"🎉 Pattern '{state['word']}' complete!")
-        print(f"📊 Total commits: {state['total_commits']}")
-        print("\n💡 Push to GitHub:")
-        print("  git push -f origin main")
-        return
-
-    # Process earliest remaining date
-    next_date = min(remaining_dates.keys())
-    num_commits = remaining_dates[next_date]
-
-    print(f"\n📝 Processing date: {next_date}")
-    print(f"   Making {num_commits} commits...")
+    print(f"\n🚀 Creating {total_commits} commits across {total_dates} dates...")
+    print(f"📅 Starting from: {one_year_ago.strftime('%Y-%m-%d')} (1 year ago)")
 
     try:
-        make_commits(next_date, num_commits)
+        # Process all dates
+        for idx, (date_str, num_commits) in enumerate(sorted(pattern_dates.items()), 1):
+            make_commits(date_str, num_commits)
+            # Show progress every 10 dates or at the end
+            if idx % 10 == 0 or idx == total_dates:
+                progress = (idx / total_dates) * 100
+                print(f"   Progress: {progress:.0f}% ({idx}/{total_dates} dates)")
 
-        state["processed_days"].append(next_date)
-        state["total_commits"] += num_commits
-        save_state(state)
-
-        progress = len(state["processed_days"]) / len(pattern_dates) * 100
-        print(f"\n✨ Progress: {progress:.1f}% complete")
-        print(f"   ({len(state['processed_days'])}/{len(pattern_dates)} dates)")
-        print(f"   Total commits: {state['total_commits']}")
-        print(f"\n⏰ Run again tomorrow to continue!")
+        print(f"\n🎉 Done! Created {total_commits} commits for '{word.upper()}'")
+        print("\n💡 Next step: Push to GitHub")
+        print("  git push -f origin main")
 
     except subprocess.CalledProcessError as e:
-        print(f"❌ Git error: {e}")
+        print(f"\n❌ Git error: {e}")
         sys.exit(1)
 
 if __name__ == "__main__":
