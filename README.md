@@ -68,11 +68,22 @@ python3 github-pixel-art.py --help
 
 ## Starting Over
 
-To create a different word:
+To create a different word, reset all commits and start fresh:
 
 ```bash
+# Remove the progress file
 rm .pixel-art-progress.txt
-git reset --hard HEAD~500
+
+# Reset to the initial commit (before pixel art)
+git log --oneline  # Find the commit hash before pixel art commits
+git reset --hard <commit-hash>
+
+# Or, delete all commits and start fresh
+git update-ref -d HEAD
+git add github-pixel-art.py README.md
+git commit -m "Initial commit"
+
+# Create new pixel art
 python3 github-pixel-art.py "NEW WORD"
 git push -f origin main
 ```
